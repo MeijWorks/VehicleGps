@@ -1,7 +1,7 @@
 /*
   VehicleGps - a small GPS library for Arduino providing basic NMEA parsing.
 Based on work by Maarten Lamers and Mikal Hart.
-Copyright (C) 2011-2013 J.A. Woltjer.
+Copyright (C) 2011-2014 J.A. Woltjer.
 All rights reserved.
  
 This program is free software: you can redistribute it and/or modify
@@ -21,7 +21,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #ifndef VehicleGps_h
 #define VehicleGps_h
 
-#include "Arduino.h"
+#include <Arduino.h>
+#include <EEPROM.h>
 
 // software version of this library
 #define GPS_VERSION 1.0
@@ -36,20 +37,27 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define GPVTG_TERM   "GPVTG"
 #define GPXTE_TERM   "GPXTE"
 #define ROXTE_TERM   "ROXTE"
+#define CAN_POS_TERM "0CFEF31C"
+#define CAN_SPD_TERM "0CFEE81C"
+#define CAN_XTE_TERM "0CFFFF2A"
 
 #define GPS_INVALID_FLOAT 999999.9
 #define GPS_INVALID_LONG 0xFFFFFFFF
 
 #define GPS_NO_STATS
 
-#define GPS_DATARATE 115200
+#define MINSPEED 0.5f
 
 class VehicleGps {
 private:
   //-------------
   // data members
   //-------------
-
+  
+  // configuration items
+  //byte gps_type;
+  byte datarate;
+  
   // nmea items
   float time, new_time;
   unsigned long date, new_date;
@@ -58,18 +66,13 @@ private:
   float altitude, new_altitude;
   float speed, new_speed;
   float course, new_course;
-  float xte, new_xte;
-  int quality, new_quality;
+  int xte, new_xte;
+  byte quality, new_quality;
 
   // timekeepers
   unsigned long last_GGA_fix, new_GGA_fix;
   unsigned long last_VTG_fix, new_VTG_fix;
   unsigned long last_XTE_fix, new_XTE_fix;
-
-  // flags for usage monitoring
-  boolean new_GGA_data;
-  boolean new_VTG_data;
-  boolean new_XTE_data;
 
   // parsing state variables
   char term[20];
@@ -79,14 +82,14 @@ private:
   byte checksum;
   int sum;
   bool is_checksum_term;
-
+  
   // sentence type of decoded message
   enum types{
-    GGA, VTG, XTE, XTE2, OTHER
+    GGA, VTG, XTE, XTE2, CAN_POS, CAN_SPD, CAN_XTE, OTHER
   };
   types sentence_type;
 
-#ifndef _GPS_NO_STATS
+#ifndef GPS_NO_STATS
   // statistics
   unsigned long encoded_characters;
   unsigned long good_sentences;
@@ -101,11 +104,10 @@ private:
   int parseInteger(const char *_c);
   
   bool strcmp(const char *_str1, const char *_str2);
-  int hexToInt(char _c);
+  byte hexToInt(char _c);
   
   bool parseTerm();
-
-
+  
 public:
   // -----------------------------------------------------
   // public member functions implemented in VehicleGps.cpp
@@ -124,10 +126,37 @@ public:
   // ----------------------------------------------------------
   // public inline member functions implemented in VehicleGps.h
   // ----------------------------------------------------------
+  inline boolean minSpeed(){
+    return GPS_KMH_PER_KNOT * speed > MINSPEED;
+  }
+
+  inline void readBaudrate(){
+    byte rates[8] = {
+    1, 2, 3, 4, 6, 8, 12, 24 };
+    
+    datarate = EEPROM.read(10);
+    
+    if (datarate > 7) datarate = 7;
+/*
+#if defined(__AVR_ATmega32U4__)    
+    Serial1.begin(long(4800) * rates[datarate]);
+#else
+    Serial.begin(long(4800) * rates[datarate]);
+#endif*/
+  }
+  
+  inline void commitBaudrate(byte _rate){
+    datarate = _rate;
+    
+    EEPROM.write(10, _rate);
+  }
   
   // -------
   // Getters
   // -------
+  inline byte getBaudrate(){
+    return datarate;
+  }
 
   // date as ddmmyy, time as hhmmsscc, and age in milliseconds
   inline void getDatetime(unsigned long *outdate, unsigned long *outtime) {
@@ -164,7 +193,7 @@ public:
   }
 
   // quality of the GPS data from GGA string
-  inline int getQuality() {
+  inline byte getQuality() {
     return quality;
   }
 
@@ -179,7 +208,7 @@ public:
   }
 
   // xte in last full GPXTE sentence in meters
-  inline float getXte() {
+  inline int getXte() {
     return xte;
   }
 
@@ -193,7 +222,7 @@ public:
   }
 
   // speed in meters per second
-  inline float getSpeedMs() {
+  inline int getSpeedMs() {
     return GPS_MS_PER_KNOT * speed;
   }
 
@@ -202,14 +231,14 @@ public:
     return GPS_KMH_PER_KNOT * speed;
   }
 
-  // cross track error in centimeters
-  inline int getXteCm() {
-    return xte * 100;
+  // cross track error in meters
+  inline float getXteM() {
+    return float(xte) / 100;
   }
   
-  //-----------
-  //age & usage
-  //-----------
+  //-------------
+  //age & version
+  //-------------
   
   //returns age of sentence
   inline unsigned long getGgaFixAge(){
@@ -225,32 +254,10 @@ public:
   inline unsigned long getXteFixAge(){
     return last_XTE_fix;
   }
-  
-  //returns true if data has not been used
-  inline boolean gotNewGgaData(){
-    boolean new_data  = new_GGA_data;
-    new_GGA_data = false;
-    return new_data;
-  }
-  
-  //returns true if data has not been used
-  inline boolean gotNewVtgData(){
-    boolean new_data  = new_VTG_data;
-    new_VTG_data = false;
-    return new_data;
-  }
-  
-  //returns true if data has not been used
-  inline boolean gotNewXteData(){
-    boolean new_data  = new_XTE_data;
-    new_XTE_data = false;
-    return new_data;
-  }
 
   // library version
   inline static float libraryVersion() {
     return GPS_VERSION;
   }
 };
-
 #endif

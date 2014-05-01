@@ -1,7 +1,7 @@
 /*
   VehicleGps - a small GPS library for Arduino providing basic NMEA parsing.
 Based on work by Maarten Lamers and Mikal Hart.
-Copyright (C) 2011-2013 J.A. Woltjer.
+Copyright (C) 2011-2014 J.A. Woltjer.
 All rights reserved.
  
 This program is free software: you can redistribute it and/or modify
@@ -18,12 +18,17 @@ You should have received a copy of the GNU Lesser General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include "VehicleGps.h"
+#include <VehicleGps.h>
 
 //------------
 // Constructor
 //------------
 VehicleGps::VehicleGps(){
+  // Configuration items
+  //gps_type = 4;
+  readBaudrate();
+  
+  // Datamembers
   time = GPS_INVALID_FLOAT;
   date = GPS_INVALID_LONG;
   latitude = GPS_INVALID_FLOAT;
@@ -31,13 +36,15 @@ VehicleGps::VehicleGps(){
   altitude = GPS_INVALID_FLOAT;
   speed = GPS_INVALID_FLOAT;
   course = GPS_INVALID_FLOAT;
-  xte = GPS_INVALID_FLOAT;
+  xte = 0;
   quality = 0;
 
+  // Timekeepers
   last_GGA_fix = 0;
   last_VTG_fix = 0;
   last_XTE_fix = 0;
 
+  // Parser internal variables
   term[0] = '\0';
   term_number = 0;
   term_offset = 0;
@@ -48,13 +55,12 @@ VehicleGps::VehicleGps(){
   sentence_type = OTHER;
 
 #ifndef GPS_NO_STATS
+  // Statistics
   encoded_characters = 0;
   good_sentences = 0;
   failed_checksum = 0;
   passed_checksum = 0;
 #endif
-
-  Serial1.begin(GPS_DATARATE);
 }
 
 //----------------------------------------
@@ -110,7 +116,7 @@ bool VehicleGps::strcmp(const char *_str1, const char *_str2) {
 // ------------------------------------------
 // Method for converting hex ascii to integer
 // ------------------------------------------
-int VehicleGps::hexToInt(char _c) {
+byte VehicleGps::hexToInt(char _c) {
   // Parse hex
   if (_c >= 'A' && _c <= 'F')
     return _c - 'A' + 10;
@@ -132,7 +138,7 @@ bool VehicleGps::parseTerm() {
     }
     else {
       // Process checksum and update state
-      checksum = 16 * hexToInt(term[0]) + hexToInt(term[1]);
+      checksum = (hexToInt(term[0]) << 4) + hexToInt(term[1]);
     }
     if (checksum == parity) {
 #ifndef GPS_NO_STATS
@@ -146,20 +152,32 @@ bool VehicleGps::parseTerm() {
         longitude = new_longitude;
         quality = new_quality;
         last_GGA_fix = millis();
-        new_GGA_data = true;
         break;
       case VTG:
         course = new_course;
         speed = new_speed;
         last_VTG_fix = millis();
-        new_VTG_data = true;
         break;
       case XTE:
       case XTE2:
         xte = new_xte;
         last_XTE_fix = millis();
-        new_XTE_data = true;
         break;
+      case CAN_POS:
+        latitude = new_latitude;
+        longitude = new_longitude;
+        last_GGA_fix = millis();
+        break;
+      case CAN_SPD:
+        course = new_course;
+        speed = new_speed;
+        altitude = new_altitude;
+        last_VTG_fix = millis();
+        break;
+      case CAN_XTE:
+        xte = new_xte;
+        quality = new_quality;
+        last_XTE_fix = millis();
       }
       return true;
     }
@@ -188,14 +206,24 @@ bool VehicleGps::parseTerm() {
       sentence_type = XTE;
     else
 #endif
-#ifdef GPRMC_TERM
-    if (strcmp(term, GPRMC_TERM))
-      sentence_type = RMC;
-    else
-#endif
 #ifdef ROXTE_TERM
     if (strcmp(term, ROXTE_TERM))
       sentence_type = XTE2;
+    else
+#endif
+#ifdef CAN_POS_TERM
+    if (strcmp(term, CAN_POS_TERM))
+      sentence_type = CAN_POS;
+    else
+#endif
+#ifdef CAN_SPD_TERM
+    if (strcmp(term, CAN_SPD_TERM))
+      sentence_type = CAN_SPD;
+    else
+#endif
+#ifdef CAN_XTE_TERM
+    if (strcmp(term, CAN_XTE_TERM))
+      sentence_type = CAN_XTE;
     else
 #endif
       sentence_type = OTHER;
@@ -247,14 +275,80 @@ bool VehicleGps::parseTerm() {
     case XTE:
       switch (term_number) {
       case 3: // XTE
-        new_xte = parseDecimal(term);
+        new_xte = parseDecimal(term) * 100;
         break;
       }
       break;
     case XTE2:
       switch (term_number) {
       case 1: // Trimble XTE
-        new_xte = parseDecimal(term);
+        new_xte = parseDecimal(term) * 100;
+        break;
+      }
+      break;
+    case CAN_POS:
+      switch (term_number) {
+      case 1: // CAN Position
+        unsigned long int val1 = 0;
+        unsigned long int val2 = 0;
+        
+        for (int i = 7; i >= 0; i-=2){
+          val1 = (val1 << 8) + (hexToInt(term[i-1]) << 4) + hexToInt(term[i]);
+        }
+        for (int i = 15; i >= 8; i-=2){
+          val2 = (val2 << 8) + (hexToInt(term[i-1]) << 4) + hexToInt(term[i]);
+        }
+        val1 = val1 - 2100000000;
+        val2 = val2 - 2100000000;
+        
+        new_latitude  = float(long(val1)) / 10000000;
+        new_longitude = float(long(val2)) / 10000000;
+#ifdef DEBUG
+        Serial.print("Lat: ");
+        Serial.println(new_latitude,7);
+        Serial.print("Long: ");
+        Serial.println(new_longitude,7);
+#endif
+        break;
+      }
+      break;
+    case CAN_SPD:
+      switch (term_number) {
+      case 1: // CAN Speed
+        unsigned int val = (hexToInt(term[2]) << 12) + (hexToInt(term[3]) << 8) + (hexToInt(term[0]) << 4) + hexToInt(term[1]);
+        new_course = float(val) / 128;
+        
+        val = (hexToInt(term[6]) << 12) + (hexToInt(term[7]) << 8) + (hexToInt(term[4]) << 4) + hexToInt(term[5]);
+        new_speed = float(val) / 256;
+        
+        val = (hexToInt(term[14]) << 12) + (hexToInt(term[15]) << 8) + (hexToInt(term[12]) << 4) + hexToInt(term[13]);
+        new_altitude = float(val) / 8 - 2500;
+#ifdef DEBUG
+        Serial.print("Course: ");
+        Serial.println(new_course, 4);
+        Serial.print("Speed: ");
+        Serial.println(new_speed, 4);
+        Serial.print("Altitude: ");
+        Serial.println(new_altitude, 4);
+#endif
+        break;
+      }
+      break;
+    case CAN_XTE:
+      switch (term_number) {
+      case 1: // CAN XTE John Deere
+        unsigned int val = (hexToInt(term[8]) << 12) + (hexToInt(term[9]) << 8) + (hexToInt(term[6]) << 4) + hexToInt(term[7]) - 32000;
+        new_xte = int(val) >> 1;
+        
+        if (term[2] == '1'){
+          new_quality = 4;
+        }
+#ifdef DEBUG
+        Serial.print("XTE: ");
+        Serial.println(new_xte);
+        Serial.print("Quality: ");
+        Serial.println(new_quality);
+#endif
         break;
       }
       break;
@@ -277,12 +371,19 @@ bool VehicleGps::update() {
   char _c;
   bool _valid_sentence = false;
   //byte _t = 0;
-  
+
+#if defined(__AVR_ATmega32U4__)   
   while(Serial1.available()){
     _c = Serial1.read();
-  
+#else
+  while(Serial.available()){
+    _c = Serial.read();
+#endif
+
+#ifndef GPS_NO_STATS
     // keep track of encoded characters
     encoded_characters++;
+#endif
 
     //start decoding, split sentence into terms separated by ","', "/r", "/n", "*" or "$".
     switch (_c) {
@@ -385,11 +486,9 @@ float VehicleGps::distanceBetween(float lat1, float long1, float lat2, float lon
 }
 
 #ifndef GPS_NO_STATS
-
 void VehicleGps::stats(unsigned long *chars, unsigned short *sentences, unsigned short *failed_cs) {
   if (chars) *chars = encoded_characters;
   if (sentences) *sentences = good_sentences;
   if (failed_cs) *failed_cs = failed_checksum;
 }
-
 #endif
