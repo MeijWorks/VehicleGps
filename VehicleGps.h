@@ -222,7 +222,7 @@ public:
   }
 
   // speed in meters per second
-  inline int getSpeedMs() {
+  inline float getSpeedMs() {
     return GPS_MS_PER_KNOT * speed;
   }
 

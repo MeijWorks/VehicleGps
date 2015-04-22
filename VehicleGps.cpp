@@ -18,7 +18,7 @@ You should have received a copy of the GNU Lesser General Public License
 along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-#include <VehicleGps.h>
+#include "VehicleGps.h"
 
 //------------
 // Constructor
@@ -34,7 +34,7 @@ VehicleGps::VehicleGps(){
   latitude = GPS_INVALID_FLOAT;
   longitude = GPS_INVALID_FLOAT;
   altitude = GPS_INVALID_FLOAT;
-  speed = GPS_INVALID_FLOAT;
+  speed = 2.699;//GPS_INVALID_FLOAT;
   course = GPS_INVALID_FLOAT;
   xte = 0;
   quality = 0;
